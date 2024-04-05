@@ -17,6 +17,7 @@ from ultralytics.utils.metrics import bbox_ioa
 from ultralytics.utils.ops import segment2box, xyxyxyxy2xywhr
 from ultralytics.utils.torch_utils import TORCHVISION_0_10, TORCHVISION_0_11, TORCHVISION_0_13
 from .utils import polygons2masks, polygons2masks_overlap
+import os
 
 DEFAULT_MEAN = (0.0, 0.0, 0.0)
 DEFAULT_STD = (1.0, 1.0, 1.0)
@@ -188,7 +189,7 @@ class Mosaic(BaseMixTransform):
         n (int, optional): The grid size, either 4 (for 2x2) or 9 (for 3x3).
     """
 
-    def __init__(self, dataset, imgsz=640, p=1.0, n=4):
+    def __init__(self, dataset, imgsz=640, p=1.0, n=4, neg_dir='', pos_dir='', neg_num='0'):
         """Initializes the object with a dataset, image size, probability, and border."""
         assert 0 <= p <= 1.0, f"The probability should be in range [0, 1], but got {p}."
         assert n in {4, 9}, "grid must be equal to 4 or 9."
@@ -197,6 +198,23 @@ class Mosaic(BaseMixTransform):
         self.imgsz = imgsz
         self.border = (-imgsz // 2, -imgsz // 2)  # width, height
         self.n = n
+
+        # # 更改此处, 读取负样本加入数（默认为2）
+        self.neg_num = int(neg_num)
+        self.img_neg_files = []  # 负样本路径列表
+        # “默认只有负样文件夹才有无标签负样本”
+        # 读取负样本文件夹
+        # additional feature
+        if os.path.isdir(neg_dir):
+            # 负样本路径
+            self.img_neg_files = [os.path.join(neg_dir, i) for i in os.listdir(neg_dir)]
+            print(
+                colorstr("Negative dir: ")
+                + f"'{neg_dir}', using {len(self.img_neg_files)} pictures from the dir as negative samples during training"
+            )
+        else:
+            # 未找到负样本
+            self.img_neg_files = []
 
     def get_indexes(self, buffer=True):
         """Return a list of random indexes from the dataset."""
@@ -252,12 +270,38 @@ class Mosaic(BaseMixTransform):
         mosaic_labels = []
         s = self.imgsz
         yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.border)  # mosaic center x, y
+
+        if self.neg_num < 0:
+            # 若负样文件夹长度为0，则放入数为0，放入列表也为0
+            num_neg = random.randint(0, abs(self.neg_num)) if len(self.img_neg_files) else 0  # 放入随机数量(0 ~ neg_num)
+        else:
+            num_neg = self.neg_num if len(self.img_neg_files) else 0  # 放入固定数量num_neg个
+
+        neg_img_url_list, neg_in_num = [], []
+        if num_neg != 0:
+            # print("放入这次mosaic的负样本个数", num_neg)
+            neg_img_url_list = random.sample(range(len(self.img_neg_files)), num_neg)  # 从所有负样本图里，随机取出num_neg个
+            neg_in_num = random.sample(range(0, 4), num_neg)  # 也许应考虑neg_in_num=0时，覆盖原图的情况
+            # 方案：替换放入mosaic的0~2张图、宽高、标签
         for i in range(4):
             labels_patch = labels if i == 0 else labels["mix_labels"][i - 1]
             # Load image
             img = labels_patch["img"]
             h, w = labels_patch.pop("resized_shape")
-
+            neg_flag = num_neg != 0 and i in neg_in_num  # bool，判断是否放入负样本
+            if neg_flag:
+                img_url = self.img_neg_files[neg_img_url_list.pop()]  # 取出待输入的负样图片地址
+                img = cv2.imread(img_url)  # BGR
+                if img is None:
+                    raise FileNotFoundError(f'Image Not Found {img_url}')
+                # 负样本图片处理（主要是缩放）
+                h0, w0 = img.shape[:2]  # 原始宽高
+                r = self.imgsz / max(h0, w0)  # 宽高比
+                if r != 1:  # 如果宽高不相等
+                    interp = cv2.INTER_LINEAR  # if (self.augment or r > 1) else cv2.INTER_AREA
+                    img = cv2.resize(img, (min(math.ceil(w0 * r), self.imgsz), min(math.ceil(h0 * r), self.imgsz)),
+                                     interpolation=interp)  # 覆盖图片
+                h, w = img.shape[:2]  # 覆盖宽高
             # Place img in img4
             if i == 0:  # top left
                 img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
@@ -276,9 +320,9 @@ class Mosaic(BaseMixTransform):
             img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
             padw = x1a - x1b
             padh = y1a - y1b
-
-            labels_patch = self._update_labels(labels_patch, padw, padh)
-            mosaic_labels.append(labels_patch)
+            if not neg_flag:  # 覆盖标签，为负样本时不进行标签合并
+                labels_patch = self._update_labels(labels_patch, padw, padh)
+                mosaic_labels.append(labels_patch)
         final_labels = self._cat_labels(mosaic_labels)
         final_labels["img"] = img4
         return final_labels
@@ -1095,7 +1139,7 @@ def v8_transforms(dataset, imgsz, hyp, stretch=False):
     """Convert images to a size suitable for YOLOv8 training."""
     pre_transform = Compose(
         [
-            Mosaic(dataset, imgsz=imgsz, p=hyp.mosaic),
+            Mosaic(dataset, imgsz=imgsz, p=hyp.mosaic,neg_dir = hyp.neg_dir,neg_num = hyp.neg_num),
             CopyPaste(p=hyp.copy_paste),
             RandomPerspective(
                 degrees=hyp.degrees,

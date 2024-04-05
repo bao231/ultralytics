@@ -124,3 +124,6 @@ cfg: # (str, optional) for overriding defaults.yaml
 
 # Tracker settings ------------------------------------------------------------------------------------------------------
 tracker: botsort.yaml # (str) tracker type, choices=[botsort.yaml, bytetrack.yaml]
+
+neg_dir: ''  # 负样本文件夹(str)，其中只有负样本图片，没有标签（默认为空）
+neg_num: 2  # 负样本加入个数(int)，设置加入一次马赛克的负样本数量[负数时为0-neg_num张负样本、正数时为放入固定neg_num张负样本]

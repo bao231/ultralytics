@@ -146,6 +146,9 @@ class BaseTrainer:
         self.callbacks = _callbacks or callbacks.get_default_callbacks()
         if RANK in {-1, 0}:
             callbacks.add_integration_callbacks(self)
+        # 负样本文件夹——初始化
+        self.neg_dir = self.args.neg_dir
+        self.neg_num = self.args.neg_num
 
     def add_callback(self, event: str, callback):
         """Appends the given callback."""
