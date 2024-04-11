@@ -111,4 +111,4 @@ download: |
   urls = ['http://images.cocodataset.org/zips/train2017.zip',  # 19G, 118k images
           'http://images.cocodataset.org/zips/val2017.zip',  # 1G, 5k images
           'http://images.cocodataset.org/zips/test2017.zip']  # 7G, 41k images (optional)
-  download(urls, dir=dir / 'images', threads=3)
+  download(urls, dir=dir / 'images', threads=3,delete=True)
